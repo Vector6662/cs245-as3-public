@@ -43,14 +43,14 @@ public class TransactionManager {
 
 	private StorageManager sm;
 	private LogManager lm;
-	private PriorityQueue<Long> q;
+	private PriorityQueue<Long> offsetQueue;
 
 	public TransactionManager() {
 		writesets = new HashMap<>();
 		//see initAndRecover
 		latestValues = null;
 		recordMap = new HashMap<>();
-		q = new PriorityQueue<>();
+		offsetQueue = new PriorityQueue<>();
 	}
 
 	/**
@@ -62,7 +62,8 @@ public class TransactionManager {
 		this.sm = sm;
 		this.lm = lm;
 
-		ArrayList<LogRecord> records = new ArrayList<>(); //log中的所有record
+		// load records
+		ArrayList<LogRecord> records = new ArrayList<>();
 		HashSet<Long> committedTxn = new HashSet<>();
 		for (int offset = lm.getLogTruncationOffset(); offset < lm.getLogEndOffset(); ) {
 			byte[] sizeBytes = lm.readLogRecord(offset, 4);
@@ -71,27 +72,23 @@ public class TransactionManager {
 			LogRecord logRecord = LogRecord.decode(recordBytes);
 			logRecord.setOffset(offset);
 			records.add(logRecord);
-			// recover committed records
-			if (LogRecord.END == logRecord.getState()) {
+			if (LogRecord.COMMIT == logRecord.getState()) {
 				committedTxn.add(logRecord.getTxnId());
 			}
 			offset += logRecord.getSize();
 		}
 
+		//recover
 		for (LogRecord record : records) {
 			long txnId = record.getTxnId();
 			if (!committedTxn.contains(txnId) || LogRecord.OPS != record.getState())
 				continue;
 
-			// todo
 			long tag = record.getOffset();
-			q.add(tag);
+			offsetQueue.offer(tag);
 			sm.queueWrite(record.getKey(), tag, record.getValues());
 			latestValues.put(record.getKey(), new TaggedValue(tag, record.getValues()));
 		}
-
-
-
 	}
 
 	/**
@@ -129,7 +126,7 @@ public class TransactionManager {
 	 * Commits a transaction, and makes its writes visible to subsequent read operations.\
 	 */
 	public void commit(long txID) {
-		LogRecord commitRecord = new LogRecord(txID, -1, new byte[]{}, LogRecord.END);
+		LogRecord commitRecord = new LogRecord(txID, -1, new byte[]{}, LogRecord.COMMIT);
 		recordMap.get(txID).add(commitRecord);
 
 		HashMap<Long,Long> keyToOffset = new HashMap<>();
@@ -137,10 +134,6 @@ public class TransactionManager {
 		for (LogRecord logRecord : recordMap.get(txID)) {
 			long offset = logRecord.persist(logRecord, lm);
 			keyToOffset.put(logRecord.getKey(), offset);
-
-//			if (LogRecord.OPS == logRecord.getState()) {
-//				keyToOffset.put(logRecord.getKey(), offset);
-//			}
 		}
 		//apply
 		ArrayList<WritesetEntry> writeset = writesets.get(txID);
@@ -148,7 +141,7 @@ public class TransactionManager {
 			for(WritesetEntry x : writeset) {
 				//tag is unused in this implementation:
 				long tag = keyToOffset.get(x.key);
-				q.add(tag);
+				offsetQueue.offer(tag);
 				sm.queueWrite(x.key, tag, x.value);
 				latestValues.put(x.key, new TaggedValue(tag, x.value));
 			}
@@ -168,9 +161,9 @@ public class TransactionManager {
 	 * These calls are in order of writes to a key and will occur once for every such queued write, unless a crash occurs.
 	 */
 	public void writePersisted(long key, long persisted_tag, byte[] persisted_value) {
-		if (persisted_tag == q.peek()) {
+		if (persisted_tag == offsetQueue.peek()) {
 			lm.setLogTruncationOffset((int)persisted_tag);
 		}
-		q.remove(persisted_tag);
+		offsetQueue.remove(persisted_tag);
 	}
 }

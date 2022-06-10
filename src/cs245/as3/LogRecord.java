@@ -5,24 +5,16 @@ import cs245.as3.interfaces.LogManager;
 import java.nio.ByteBuffer;
 
 public class LogRecord {
-    private int size;//4
-    private long txnId;//8
-    private long key;//8
+    private int size;//4 Bytes
+    private long txnId;//8 Bytes
+    private long key;//8 Bytes
     private int offset;
-    private int state;//4
+    private int state;//4 Bytes
     private byte[] values;//
 
-    public static int OPS = 1;
-    public static int END = 2;
-
-    public LogRecord(long txnId){
-        this.txnId = txnId;
-    }
-
-    public LogRecord(long txnId, int state){
-        this.txnId = txnId;
-        this.state = state;
-    }
+    // state types
+    public static int OPS = 0; //write
+    public static int COMMIT = 1; // commit record
 
     public LogRecord(int size, long tnxId, long key,int state,byte[] values) {
         this.size = size;
